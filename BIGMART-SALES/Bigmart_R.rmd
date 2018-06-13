@@ -1,0 +1,370 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+Big mart sales prediction problem:  
+
+```{r}
+install.packages("corrplot")
+install.packages("xgboost")
+install.packages("cowplot")
+library(data.table) # used for reading and manipulation of data
+library(dplyr)      # used for data manipulation and joining
+library(ggplot2)    # used for ploting 
+library(caret)      # used for modeling
+library(corrplot)   # used for making correlation plot
+library(xgboost)    # used for building XGBoost model
+library(cowplot)    # used for combining multiple plots 
+
+train = fread("Train_UWu5bXk.csv") 
+test = fread("Test_u94Q5KV.csv")
+submission = fread("SampleSubmission_TmnO39y.csv")
+dim(train);dim(test)
+```
+Combine train and test features to combinely understand the data distributions
+```{r}
+test[,Item_Outlet_Sales := NA]
+combi = rbind(train, test) # combining train and test datasets
+dim(combi)
+```
+Visualizing the continuous target variable in a histogram 
+
+```{r}
+ggplot(train) + geom_histogram(aes(train$Item_Outlet_Sales), binwidth = 100, fill = "red") +
+  xlab("Item_Outlet_Sales")
+
+```
+Independent Variables (numeric variables)
+
+```{r}
+p1 = ggplot(combi) + geom_histogram(aes(Item_Weight), binwidth = 0.5, fill = "blue")
+p2 = ggplot(combi) + geom_histogram(aes(Item_Visibility), binwidth = 0.005, fill = "blue")
+p3 = ggplot(combi) + geom_histogram(aes(Item_MRP), binwidth = 1, fill = "blue")
+plot_grid(p1, p2, p3, nrow = 1) # plot_grid() from cowplot package
+```
+Observations
+
+There seems to be no clear-cut pattern in Item_Weight.
+Item_Visibility is right-skewed and should be transformed to curb its skewness.
+We can clearly see 4 different distributions for Item_MRP. It is an interesting insight.
+
+Independent Variables (categorical variables)
+
+```{r}
+ggplot(combi %>% group_by(Item_Fat_Content) %>% summarise(Count = n())) + 
+  geom_bar(aes(Item_Fat_Content, Count), stat = "identity", fill = "coral1")
+combi$Item_Fat_Content[combi$Item_Fat_Content == "LF"] = "Low Fat"
+combi$Item_Fat_Content[combi$Item_Fat_Content == "low fat"] = "Low Fat"
+combi$Item_Fat_Content[combi$Item_Fat_Content == "reg"] = "Regular"
+
+```
+As can be observed, "Low Fat", "low fat", "LF" can all be classified as "Low Fat" and similar with "Regular"
+
+
+```{r}
+# plot for Item_Type
+p4 = ggplot(combi %>% group_by(Item_Type) %>% summarise(Count = n())) + 
+  geom_bar(aes(Item_Type, Count), stat = "identity", fill = "coral1") +
+  xlab("") +
+  geom_label(aes(Item_Type, Count, label = Count), vjust = 0.5) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  ggtitle("Item_Type")
+# plot for Outlet_Identifier
+p5 = ggplot(combi %>% group_by(Outlet_Identifier) %>% summarise(Count = n())) + 
+  geom_bar(aes(Outlet_Identifier, Count), stat = "identity", fill = "coral1") +
+  geom_label(aes(Outlet_Identifier, Count, label = Count), vjust = 0.5) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+# plot for Outlet_Size
+p6 = ggplot(combi %>% group_by(Outlet_Size) %>% summarise(Count = n())) + 
+  geom_bar(aes(Outlet_Size, Count), stat = "identity", fill = "coral1") +
+  geom_label(aes(Outlet_Size, Count, label = Count), vjust = 0.5) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+second_row = plot_grid(p5, p6, nrow = 1)
+plot_grid(p4, second_row, ncol = 1)
+```
+
+As can be observed in "Outlet_Size", a major part of 4016 observations have no defined label. These could be missing values. 
+```{r}
+# plot for Outlet_Establishment_Year
+p7 = ggplot(combi %>% group_by(Outlet_Establishment_Year) %>% summarise(Count = n())) + 
+  geom_bar(aes(factor(Outlet_Establishment_Year), Count), stat = "identity", fill = "coral1") +
+  geom_label(aes(factor(Outlet_Establishment_Year), Count, label = Count), vjust = 0.5) +
+  xlab("Outlet_Establishment_Year") +
+  theme(axis.text.x = element_text(size = 8.5))
+# plot for Outlet_Type
+p8 = ggplot(combi %>% group_by(Outlet_Type) %>% summarise(Count = n())) + 
+  geom_bar(aes(Outlet_Type, Count), stat = "identity", fill = "coral1") +
+  geom_label(aes(factor(Outlet_Type), Count, label = Count), vjust = 0.5) +
+  theme(axis.text.x = element_text(size = 8.5))
+# ploting both plots together
+plot_grid(p7, p8, ncol = 2)
+```
+Observations
+
+Lesser number of observations in 1998 
+Supermarket Type 1 seems to be the most popular category of Outlet_Type.
+
+
+bivariate analysis : plot all independent variables with respect to the target variable
+
+```{r}
+train = combi[1:nrow(train)] 
+# Item_Weight vs Item_Outlet_Sales
+p9 = ggplot(train) + 
+     geom_point(aes(Item_Weight, Item_Outlet_Sales), colour = "violet", alpha = 0.3) +
+     theme(axis.title = element_text(size = 8.5))
+# Item_Visibility vs Item_Outlet_Sales
+p10 = ggplot(train) + 
+      geom_point(aes(Item_Visibility, Item_Outlet_Sales), colour = "violet", alpha = 0.3) +
+      theme(axis.title = element_text(size = 8.5))
+# Item_MRP vs Item_Outlet_Sales
+p11 = ggplot(train) + 
+      geom_point(aes(Item_MRP, Item_Outlet_Sales), colour = "violet", alpha = 0.3) +
+      theme(axis.title = element_text(size = 8.5))
+second_row_2 = plot_grid(p10, p11, ncol = 2)
+plot_grid(p9, second_row_2, nrow = 2)
+```
+Observations
+
+Item_Outlet_Sales is spread well across the entire range -No obvious pattern.
+In Item_Visibility vs Item_Outlet_Sales, there is a string of points at Item_Visibility = 0.0 but, cannot be completely zero. We will take note of this issue and deal with it in the later stages.
+In the third plot of Item_MRP vs Item_Outlet_Sales, we can clearly see 4 segments of prices that can be used in feature engineering to create a new variable.
+
+```{r}
+# Item_Type vs Item_Outlet_Sales
+p12 = ggplot(train) + 
+      geom_violin(aes(Item_Type, Item_Outlet_Sales), fill = "magenta") +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1),
+            axis.text = element_text(size = 6),
+            axis.title = element_text(size = 8.5))
+# Item_Fat_Content vs Item_Outlet_Sales
+p13 = ggplot(train) + 
+      geom_violin(aes(Item_Fat_Content, Item_Outlet_Sales), fill = "magenta") +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1),
+            axis.text = element_text(size = 8),
+            axis.title = element_text(size = 8.5))
+# Outlet_Identifier vs Item_Outlet_Sales
+p14 = ggplot(train) + 
+      geom_violin(aes(Outlet_Identifier, Item_Outlet_Sales), fill = "magenta") +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1),
+            axis.text = element_text(size = 8),
+            axis.title = element_text(size = 8.5))
+second_row_3 = plot_grid(p13, p14, ncol = 2)
+plot_grid(p12, second_row_3, ncol = 1)
+```
+Observations
+
+Distribution of Item_Outlet_Sales across the categories of Item_Type is not very distinct and same is the case with Item_Fat_Content.
+The distribution for OUT010 and OUT019 categories of Outlet_Identifier are quite similar and very much different from the rest of the categories of Outlet_Identifier.
+
+```{r}
+ggplot(train) + geom_violin(aes(Outlet_Size, Item_Outlet_Sales), fill = "magenta")
+
+```
+As we can see, the first unnamed dataset looks similar to "Small"
+So, can replace those missing values with "Small"
+Other Independent variables - 
+```{r}
+p15 = ggplot(train) + geom_violin(aes(Outlet_Location_Type, Item_Outlet_Sales), fill = "magenta")
+p16 = ggplot(train) + geom_violin(aes(Outlet_Type, Item_Outlet_Sales), fill = "magenta")
+plot_grid(p15, p16, ncol = 1)
+```
+Observations
+
+Tier 1 and Tier 3 locations of Outlet_Location_Type look similar.
+In the Outlet_Type plot, Grocery Store has most of its data points around the lower sales values as compared to the other categories.
+
+Now, to handle missing values--
+1. ItemWeights
+2. Itemvisibility - zero error
+
+```{r}
+sum(is.na(combi$Item_Weight))
+missing_index = which(is.na(combi$Item_Weight))
+for(i in missing_index){
+  
+  item = combi$Item_Identifier[i]
+  combi$Item_Weight[i] = mean(combi$Item_Weight[combi$Item_Identifier == item], na.rm = T)
+}
+sum(is.na(combi$Item_Weight))
+zero_index = which(combi$Item_Visibility == 0)
+for(i in zero_index){
+  
+  item = combi$Item_Identifier[i]
+  combi$Item_Visibility[i] = mean(combi$Item_Visibility[combi$Item_Identifier == item], na.rm = T)
+  
+}
+```
+
+```{r}
+perishable = c("Breads", "Breakfast", "Dairy", "Fruits and Vegetables", "Meat", "Seafood")
+non_perishable = c("Baking Goods", "Canned", "Frozen Foods", "Hard Drinks", "Health and Hygiene", "Household", "Soft Drinks")
+# create a new feature 'Item_Type_new'
+combi[,Item_Type_new := ifelse(Item_Type %in% perishable, "perishable", ifelse(Item_Type %in% non_perishable, "non_perishable", "not_sure"))]
+```
+Now, we can make sense of the item identifier feature by 
+```{r}
+table(combi$Item_Type, substr(combi$Item_Identifier, 1, 2))
+combi[,Item_category := substr(combi$Item_Identifier, 1, 2)]
+combi$Item_Fat_Content[combi$Item_category == "NC"] = "Non-Edible"
+# years of operation for outlets
+combi[,Outlet_Years := 2013 - Outlet_Establishment_Year]
+combi$Outlet_Establishment_Year = as.factor(combi$Outlet_Establishment_Year)
+# Price per unit weight
+combi[,price_per_unit_wt := Item_MRP/Item_Weight]
+# creating new independent variable - Item_MRP_clusters
+combi[,Item_MRP_clusters := ifelse(Item_MRP < 69, "1st", 
+                                   ifelse(Item_MRP >= 69 & Item_MRP < 136, "2nd",
+                                          ifelse(Item_MRP >= 136 & Item_MRP < 203, "3rd", "4th")))]
+combi[,Outlet_Size_num := ifelse(Outlet_Size == "Small", 0,
+                                 ifelse(Outlet_Size == "Medium", 1, 2))]
+combi[,Outlet_Location_Type_num := ifelse(Outlet_Location_Type == "Tier 3", 0,
+                                          ifelse(Outlet_Location_Type == "Tier 2", 1, 2))]
+# removing categorical variables after label encoding
+combi[, c("Outlet_Size", "Outlet_Location_Type") := NULL]
+
+```
+```{r}
+ohe = dummyVars("~.", data = combi[,-c("Item_Identifier", "Outlet_Establishment_Year", "Item_Type")], fullRank = T)
+ohe_df = data.table(predict(ohe, combi[,-c("Item_Identifier", "Outlet_Establishment_Year", "Item_Type")]))
+combi = cbind(combi[,"Item_Identifier"], ohe_df)
+```
+```{r}
+combi[,Item_Visibility := log(Item_Visibility + 1)] # log + 1 to avoid division by zero
+combi[,price_per_unit_wt := log(price_per_unit_wt + 1)]
+
+```
+Scaling the variables
+
+```{r}
+num_vars = which(sapply(combi, is.numeric)) # index of numeric features
+num_vars_names = names(num_vars)
+combi_numeric = combi[,setdiff(num_vars_names, "Item_Outlet_Sales"), with = F]
+prep_num = preProcess(combi_numeric, method=c("center", "scale"))
+combi_numeric_norm = predict(prep_num, combi_numeric)
+combi[,setdiff(num_vars_names, "Item_Outlet_Sales") := NULL] # removing numeric independent variables
+combi = cbind(combi, combi_numeric_norm)
+train = combi[1:nrow(train)]
+test = combi[(nrow(train) + 1):nrow(combi)]
+test[,Item_Outlet_Sales := NULL]
+```
+Examining Correlations among variables
+```{r}
+train
+cor_train = cor(train[,-c("Item_Identifier")])
+corrplot(cor_train, method = "pie", type = "lower", tl.cex = 0.9)
+```
+Variables price_per_unit_wt and Item_Weight are highly correlated as the former one was created from the latter. Similarly price_per_unit_wt and Item_MRP are highly correlated for the same reason.
+
+
+Linear Regression Model
+
+```{r}
+linear_reg_mod = lm(Item_Outlet_Sales ~ ., data = train[,-c("Item_Identifier")])
+plot(linear_reg_mod)
+submission$Item_Outlet_Sales = predict(linear_reg_mod, test[,-c("Item_Identifier")])
+write.csv(submission, "Linear_Reg_submit.csv", row.names = F)
+
+```
+
+To understand regression analysis, we can check the following assumptions
+
+Linear and additive - checking if you fit a linear model to a non-linear dataset. can be observed from the residual vs fitted plots from regression model plots. This plot shows the distribution of residuals(errors) vs fitted values(predicted). A distorted pattern shows lack of linearity, a clear non-linear plot can be discovered, or a funnel shape indicates non constant variance i.e. heteroskedasticity.
+
+
+Normal-QQ plot - checking if the dataset has an underlying normal distribution.If the errors are not normally distributed, non - linear transformation of the variables (response or predictors) can bring improvement in the model.
+
+
+Scale Location Plot - This helps in detecting variance among errors. It also shows the presence of outliers and how they are affecting the model. If this plot shows any pattern, it implies non-normal distribution of errors. 
+
+
+Residuals vs Leverage plot - also known as cooks distance plot, tends to show influential points vs others. 
+
+Ridge and Lasso regression are kinds of regularized regressions, while in ridge we used the squares of theta while in lasso we used absolute value of theta. Elasticnet regression has a combined network of both these methods. 
+```{r}
+install.packages("glmnet")
+library(glmnet)
+set.seed(1235)
+my_control = trainControl(method="cv", number=5)
+Grid = expand.grid(alpha = 1, lambda = seq(0.001,0.1,by = 0.0002))
+
+lasso_linear_reg_mod = train(x = train[, -c("Item_Identifier", "Item_Outlet_Sales")], y = train$Item_Outlet_Sales,
+                       method='glmnet', trControl= my_control, tuneGrid = Grid)
+
+set.seed(1236)
+my_control = trainControl(method="cv", number=5)
+Grid = expand.grid(alpha = 0, lambda = seq(0.001,0.1,by = 0.0002))
+
+ridge_linear_reg_mod = train(x = train[, -c("Item_Identifier", "Item_Outlet_Sales")], y = train$Item_Outlet_Sales,
+                       method='glmnet', trControl= my_control, tuneGrid = Grid)
+```
+RandomForest 
+
+
+Tuning can be done in 2 ways to tune some possible machine learning parameters
+1. Tune Using Caret
+
+Only mtry can be tuned 
+This can be done by randomly searching values in a given range and choosing values in a range based on the accuracies attained 
+
+Other way is to generate accuracies on a grid of parameters which can be used to tune the parameters. 
+
+```{r}
+set.seed(1237)
+my_control = trainControl(method="cv", number=5) # 5-fold CV
+tgrid = expand.grid(
+  .mtry = c(3:10),
+  .splitrule = "variance",
+  .min.node.size = c(10,15,20)
+)
+rf_mod = train(x = train[, -c("Item_Identifier", "Item_Outlet_Sales")], 
+               y = train$Item_Outlet_Sales,
+               method='ranger', 
+               trControl= my_control, 
+               tuneGrid = tgrid,
+               num.trees = 400,
+               importance = "permutation")
+plot(rf_mod)
+```
+
+2. Tune Using Algorithm Tools
+
+tunerf - can be used to find the best optimal value for mtry given the dataset
+
+```{r}
+bestmtry <- tuneRF(x = train[, -c("Item_Identifier", "Item_Outlet_Sales")], 
+               y = train$Item_Outlet_Sales, stepFactor=1.5, improve=1e-5, ntree=400)
+print(bestmtry)
+```
+Feature Importance can also be determined by plotting 
+```{r}
+plot(varImp(rf_mod))
+param_list = list(
+        
+        objective = "reg:linear",
+        eta=0.01,
+        gamma = 1,
+        max_depth=6,
+        subsample=0.8,
+        colsample_bytree=0.5
+        )
+dtrain = xgb.DMatrix(data = as.matrix(train[,-c("Item_Identifier", "Item_Outlet_Sales")]), label= train$Item_Outlet_Sales)
+dtest = xgb.DMatrix(data = as.matrix(test[,-c("Item_Identifier")]))
+set.seed(112)
+xgbcv = xgb.cv(params = param_list, 
+               data = dtrain, 
+               nrounds = 1000, 
+               nfold = 5, 
+               print_every_n = 10, 
+               early_stopping_rounds = 30, 
+               maximize = F)
+
+```
+
+```{r}
+xgb_model = xgb.train(data = dtrain, params = param_list, nrounds = 430)
+var_imp = xgb.importance(feature_names = setdiff(names(train), c("Item_Identifier", "Item_Outlet_Sales")), 
+                         model = xgb_model)
+xgb.plot.importance(var_imp)
+```
